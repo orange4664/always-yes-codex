@@ -94,14 +94,14 @@ function maybeAnswer() {
   }
 
   const text = normalize(recent);
-  if (!looksLikeQuestion(text) || isBlockedPrompt(text) || !looksLikeLowRiskDirectionPrompt(text)) {
+  if (!shouldAutoAnswer(text)) {
     return;
   }
 
   answerTimer = setTimeout(() => {
     answerTimer = null;
     const current = normalize(recent);
-    if (isBlockedPrompt(current) || !looksLikeLowRiskDirectionPrompt(current)) {
+    if (!shouldAutoAnswer(current)) {
       log("skip: prompt changed or became blocked");
       return;
     }
@@ -116,6 +116,22 @@ function looksLikeQuestion(text) {
   const promptTail = text.slice(-500);
   return /[?？](?:\s|[:：>»\]\)]|$)/.test(promptTail)
     || /\b\(y\/n\)|\[y\/n\]|\byes\/no\b/i.test(promptTail);
+}
+
+function shouldAutoAnswer(text) {
+  return looksLikeQuestion(text)
+    && !isBlockedPrompt(text)
+    && (looksLikeYesNoPrompt(text) || looksLikeLowRiskDirectionPrompt(text));
+}
+
+function looksLikeYesNoPrompt(text) {
+  const promptTail = text.slice(-500);
+  const patterns = [
+    /\b\(y\/n\)|\[y\/n\]|\byes\/no\b/i,
+    /\b(?:do|does|did|is|are|was|were|can|could|should|shall|would|will|have|has|had|may|might|must)\b[^?]{0,240}\?/i,
+    /(?:吗|么|是否|是不是|有没有|要不要|能不能|可不可以|需不需要|要我|我可以)[^？?]{0,160}[？?]/,
+  ];
+  return patterns.some((pattern) => pattern.test(promptTail));
 }
 
 function looksLikeLowRiskDirectionPrompt(text) {
@@ -242,6 +258,14 @@ function runSelfTest() {
       expected: true,
     },
     {
+      text: "你今天喝过咖啡了吗？",
+      expected: true,
+    },
+    {
+      text: "你想选哪个方案？",
+      expected: false,
+    },
+    {
       text: "Do you want to allow this command to run outside the sandbox?",
       expected: false,
     },
@@ -254,9 +278,7 @@ function runSelfTest() {
   let failed = 0;
   for (const testCase of cases) {
     const text = normalize(testCase.text);
-    const actual = looksLikeQuestion(text)
-      && !isBlockedPrompt(text)
-      && looksLikeLowRiskDirectionPrompt(text);
+    const actual = shouldAutoAnswer(text);
     if (actual !== testCase.expected) {
       failed += 1;
       process.stderr.write(`FAIL: ${testCase.text}\n`);
