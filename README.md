@@ -9,8 +9,6 @@ mention approval, permission, sandbox escalation, command execution,
 install/download, network access, deletion, overwrite, reset, admin rights, and
 similar terms.
 
-Author: orange4664 <102470751+orange4664@users.noreply.github.com>
-
 ## Why
 
 Codex sometimes pauses for ordinary workflow questions like "do you want me to
