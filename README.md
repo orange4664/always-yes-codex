@@ -73,5 +73,6 @@ npm unlink -g always-yes-codex
 ## Notes
 
 - This is heuristic automation, not a security boundary.
+- The same prompt is answered only once per session, even if Codex redraws it.
 - Keep using Codex's normal approval controls for commands and permissions.
 - Use `--verbose` for the first few sessions to see when the wrapper answers.

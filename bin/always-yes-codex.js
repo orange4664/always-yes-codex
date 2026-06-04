@@ -45,6 +45,7 @@ let recent = "";
 let lastAnswerAt = 0;
 let answered = false;
 let answerTimer = null;
+const answeredPromptKeys = new Set();
 const stdinDecoder = new StringDecoder("utf8");
 
 pty.onData((data) => {
@@ -94,20 +95,25 @@ function maybeAnswer() {
   }
 
   const text = normalize(recent);
-  if (!shouldAutoAnswer(text)) {
+  const promptKey = autoAnswerPromptKey(text);
+  if (promptKey === null || answeredPromptKeys.has(promptKey)) {
     return;
   }
 
   answerTimer = setTimeout(() => {
     answerTimer = null;
     const current = normalize(recent);
-    if (!shouldAutoAnswer(current)) {
+    const currentPromptKey = autoAnswerPromptKey(current);
+    if (currentPromptKey === null || answeredPromptKeys.has(currentPromptKey)) {
       log("skip: prompt changed or became blocked");
       return;
     }
     pty.write(`${answer}\r`);
     lastAnswerAt = Date.now();
     answered = true;
+    answeredPromptKeys.add(currentPromptKey);
+    trimAnsweredPromptKeys();
+    recent = "";
     log(`answered: ${answer}`);
   }, Math.max(0, delayMs));
 }
@@ -119,10 +125,60 @@ function looksLikeQuestion(text) {
 }
 
 function shouldAutoAnswer(text) {
-  return !isBlockedPrompt(text)
-    && ((looksLikeQuestion(text)
-      && (looksLikeYesNoPrompt(text) || looksLikeLowRiskDirectionPrompt(text)))
-      || looksLikeRecommendedChoicePrompt(text));
+  return autoAnswerPromptKey(text) !== null;
+}
+
+function autoAnswerPromptKey(text) {
+  if (isBlockedPrompt(text)) {
+    return null;
+  }
+
+  const promptText = extractPromptText(text);
+  if (promptText === null) {
+    return null;
+  }
+
+  if ((looksLikeQuestion(promptText)
+    && (looksLikeYesNoPrompt(promptText) || looksLikeLowRiskDirectionPrompt(promptText)))
+    || looksLikeRecommendedChoicePrompt(promptText)) {
+    return promptText.toLowerCase();
+  }
+
+  return null;
+}
+
+function extractPromptText(text) {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (/[?？]|\b\(y\/n\)|\[y\/n\]|\byes\/no\b/i.test(line)) {
+      const parts = [];
+      if (index > 0 && containsRecommendation(lines[index - 1])) {
+        parts.push(lines[index - 1]);
+      }
+      parts.push(line);
+      if (index + 1 < lines.length && containsRecommendation(lines[index + 1])) {
+        parts.push(lines[index + 1]);
+      }
+      return normalize(parts.join(" ")).slice(-1000);
+    }
+  }
+
+  const tailText = text.slice(-1000);
+  if (looksLikeRecommendedChoicePrompt(tailText)) {
+    return normalize(tailText);
+  }
+
+  return null;
+}
+
+function containsRecommendation(text) {
+  return /\b(?:i recommend|my recommendation|recommended)\b/i.test(text)
+    || /(?:我推荐|我建议|建议选|推荐选|推荐|建议)/.test(text);
 }
 
 function looksLikeYesNoPrompt(text) {
@@ -187,6 +243,13 @@ function normalize(value) {
 
 function tail(value, maxLength) {
   return value.length > maxLength ? value.slice(value.length - maxLength) : value;
+}
+
+function trimAnsweredPromptKeys() {
+  while (answeredPromptKeys.size > 100) {
+    const oldest = answeredPromptKeys.values().next().value;
+    answeredPromptKeys.delete(oldest);
+  }
 }
 
 function takeFlag(values, flag) {
@@ -298,6 +361,20 @@ function runSelfTest() {
     if (actual !== testCase.expected) {
       failed += 1;
       process.stderr.write(`FAIL: ${testCase.text}\n`);
+    }
+  }
+
+  const repeatPrompt = normalize("你今天喝过水了吗？");
+  const repeatKey = autoAnswerPromptKey(repeatPrompt);
+  if (repeatKey === null) {
+    failed += 1;
+    process.stderr.write("FAIL: repeat prompt did not produce a key\n");
+  } else {
+    const testAnsweredPromptKeys = new Set([repeatKey]);
+    const repeatedKey = autoAnswerPromptKey(normalize(`${repeatPrompt}\nyes`));
+    if (repeatedKey !== repeatKey || !testAnsweredPromptKeys.has(repeatedKey)) {
+      failed += 1;
+      process.stderr.write("FAIL: repeat prompt key was not stable\n");
     }
   }
 
