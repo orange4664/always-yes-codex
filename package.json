@@ -1,0 +1,25 @@
+{
+  "name": "always-yes-codex",
+  "version": "0.1.0",
+  "description": "Pseudo-terminal wrapper that auto-answers low-risk Codex CLI direction prompts with yes.",
+  "author": "orange4664 <102470751+orange4664@users.noreply.github.com>",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/orange4664/always-yes-codex.git"
+  },
+  "bugs": {
+    "url": "https://github.com/orange4664/always-yes-codex/issues"
+  },
+  "homepage": "https://github.com/orange4664/always-yes-codex#readme",
+  "bin": {
+    "always-yes-codex": "./bin/always-yes-codex.js"
+  },
+  "scripts": {
+    "check": "node --check bin/always-yes-codex.js"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0"
+  }
+}

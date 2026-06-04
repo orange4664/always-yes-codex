@@ -1,0 +1,246 @@
+#!/usr/bin/env node
+
+import os from "node:os";
+import path from "node:path";
+import process from "node:process";
+import { execFileSync } from "node:child_process";
+import { spawn } from "node-pty";
+
+const args = process.argv.slice(2);
+const verbose = takeFlag(args, "--verbose");
+const once = takeFlag(args, "--once");
+const command = takeOption(args, "--command") ?? "codex";
+const answer = takeOption(args, "--answer") ?? "yes";
+const delayMs = Number(takeOption(args, "--delay-ms") ?? 250);
+const cooldownMs = Number(takeOption(args, "--cooldown-ms") ?? 4000);
+
+if (takeFlag(args, "--help")) {
+  printHelp();
+  process.exit(0);
+}
+
+if (takeFlag(args, "--self-test")) {
+  runSelfTest();
+  process.exit(0);
+}
+
+const pty = spawn(resolveCommand(command), args, {
+  name: "xterm-256color",
+  cols: process.stdout.columns || 120,
+  rows: process.stdout.rows || 30,
+  cwd: process.cwd(),
+  env: {
+    ...process.env,
+    TERM: process.env.TERM || "xterm-256color",
+  },
+});
+
+let recent = "";
+let lastAnswerAt = 0;
+let answered = false;
+let answerTimer = null;
+
+pty.onData((data) => {
+  process.stdout.write(data);
+  recent = tail(`${recent}${stripAnsi(data)}`, 8000);
+  maybeAnswer();
+});
+
+pty.onExit(({ exitCode }) => {
+  if (answerTimer) {
+    clearTimeout(answerTimer);
+  }
+  process.exit(exitCode ?? 0);
+});
+
+process.stdin.setRawMode?.(true);
+process.stdin.resume();
+process.stdin.on("data", (data) => {
+  pty.write(data.toString("binary"));
+});
+
+process.stdout.on("resize", () => {
+  pty.resize(process.stdout.columns || 120, process.stdout.rows || 30);
+});
+
+process.on("SIGINT", () => {
+  pty.write("\x03");
+});
+
+function maybeAnswer() {
+  if (answerTimer || (once && answered)) {
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastAnswerAt < cooldownMs) {
+    return;
+  }
+
+  const text = normalize(recent);
+  if (!looksLikeQuestion(text) || isBlockedPrompt(text) || !looksLikeLowRiskDirectionPrompt(text)) {
+    return;
+  }
+
+  answerTimer = setTimeout(() => {
+    answerTimer = null;
+    const current = normalize(recent);
+    if (isBlockedPrompt(current) || !looksLikeLowRiskDirectionPrompt(current)) {
+      log("skip: prompt changed or became blocked");
+      return;
+    }
+    pty.write(`${answer}\r`);
+    lastAnswerAt = Date.now();
+    answered = true;
+    log(`answered: ${answer}`);
+  }, Math.max(0, delayMs));
+}
+
+function looksLikeQuestion(text) {
+  const promptTail = text.slice(-500);
+  return /[?？](?:\s|[:：>»\]\)]|$)/.test(promptTail)
+    || /\b\(y\/n\)|\[y\/n\]|\byes\/no\b/i.test(promptTail);
+}
+
+function looksLikeLowRiskDirectionPrompt(text) {
+  const patterns = [
+    /\b(?:should|shall|can) i\b.{0,120}\b(?:continue|proceed|go ahead|use|take|follow|start|draft|make|create|implement)\b/i,
+    /\bdo you want me to\b.{0,120}\b(?:continue|proceed|go ahead|use|take|follow|start|draft|make|create|implement)\b/i,
+    /\bwould you like me to\b.{0,120}\b(?:continue|proceed|go ahead|use|take|follow|start|draft|make|create|implement)\b/i,
+    /\bis (?:that|this) (?:ok|okay|acceptable|fine)\b/i,
+    /\b(?:accept|use|follow) (?:this|that|the) (?:direction|approach|plan|recommendation)\b/i,
+    /(?:要不要|是否|可以|可以吗|要我|我可以).{0,80}(?:继续|按|采用|接受|走|方向|方案|建议|计划|实现|创建|开始)/,
+    /(?:这个|该|这套).{0,30}(?:方向|方案|建议|计划).{0,30}(?:可以|接受|同意|行吗|好吗)/,
+  ];
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function isBlockedPrompt(text) {
+  const blockers = [
+    /\b(?:approval|approve|permission|authorize|allow)\b/i,
+    /\b(?:sandbox|escalat(?:e|ed|ion)|require_escalated|outside the sandbox)\b/i,
+    /\b(?:run|execute|launch)\b.{0,80}\b(?:command|shell|terminal|powershell|cmd|bash|script)\b/i,
+    /\b(?:delete|remove|overwrite|erase|format|reset|checkout|revert|kill)\b/i,
+    /\b(?:install|download|network|internet|registry|npm|pip|cargo|nuget|scp|ssh|sudo|administrator|admin)\b/i,
+    /(?:授权|审批|批准|允许|权限|提权|沙箱|执行命令|运行命令|终端|命令行|删除|覆盖|重置|回滚|安装|下载|联网|网络|管理员|高风险|危险)/,
+  ];
+  return blockers.some((pattern) => pattern.test(text));
+}
+
+function stripAnsi(value) {
+  return value
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
+    .replace(/\r/g, "\n");
+}
+
+function normalize(value) {
+  return value
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function tail(value, maxLength) {
+  return value.length > maxLength ? value.slice(value.length - maxLength) : value;
+}
+
+function takeFlag(values, flag) {
+  const index = values.indexOf(flag);
+  if (index === -1) {
+    return false;
+  }
+  values.splice(index, 1);
+  return true;
+}
+
+function takeOption(values, option) {
+  const index = values.indexOf(option);
+  if (index === -1) {
+    return undefined;
+  }
+  const value = values[index + 1];
+  values.splice(index, value === undefined ? 1 : 2);
+  return value;
+}
+
+function resolveCommand(commandName) {
+  if (process.platform !== "win32" || path.extname(commandName) || commandName.includes(path.sep)) {
+    return commandName;
+  }
+  try {
+    const matches = execFileSync("where.exe", [commandName], { encoding: "utf8" })
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return matches.find((match) => match.toLowerCase().endsWith(".cmd")) ?? matches[0] ?? commandName;
+  } catch {
+    return commandName;
+  }
+}
+
+function log(message) {
+  if (verbose) {
+    process.stderr.write(`[always-yes-codex] ${message}${os.EOL}`);
+  }
+}
+
+function printHelp() {
+  process.stdout.write(`always-yes-codex
+
+Run Codex CLI in a pseudo-terminal and automatically type "yes" for low-risk
+direction/continuation questions. Permission, approval, command execution,
+install, network, delete, and other high-risk prompts are deliberately skipped.
+
+Usage:
+  always-yes-codex [options] [codex args...]
+
+Options:
+  --answer <text>       Text to send when a safe prompt is detected. Default: yes
+  --command <command>   Command to wrap. Default: codex
+  --delay-ms <ms>       Delay before answering. Default: 250
+  --cooldown-ms <ms>    Minimum time between answers. Default: 4000
+  --once                Answer at most once per session
+  --verbose             Print auto-answer decisions to stderr
+  --help                Show this help
+`);
+}
+
+function runSelfTest() {
+  const cases = [
+    {
+      text: "I recommend approach A. Do you want me to continue with this direction?",
+      expected: true,
+    },
+    {
+      text: "这个方案可以吗？",
+      expected: true,
+    },
+    {
+      text: "Do you want to allow this command to run outside the sandbox?",
+      expected: false,
+    },
+    {
+      text: "是否允许我执行命令安装依赖？",
+      expected: false,
+    },
+  ];
+
+  let failed = 0;
+  for (const testCase of cases) {
+    const text = normalize(testCase.text);
+    const actual = looksLikeQuestion(text)
+      && !isBlockedPrompt(text)
+      && looksLikeLowRiskDirectionPrompt(text);
+    if (actual !== testCase.expected) {
+      failed += 1;
+      process.stderr.write(`FAIL: ${testCase.text}\n`);
+    }
+  }
+
+  if (failed > 0) {
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write("self-test passed\n");
+}
