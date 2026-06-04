@@ -12,8 +12,9 @@ const verbose = takeFlag(args, "--verbose");
 const once = takeFlag(args, "--once");
 let command = takeOption(args, "--command") ?? "codex";
 const answer = takeOption(args, "--answer") ?? "yes";
-const submitKeyName = takeOption(args, "--submit-key") ?? "crlf";
+const submitKeyName = takeOption(args, "--submit-key") ?? "cr";
 const delayMs = Number(takeOption(args, "--delay-ms") ?? 250);
+const submitDelayMs = Number(takeOption(args, "--submit-delay-ms") ?? 500);
 const cooldownMs = Number(takeOption(args, "--cooldown-ms") ?? 4000);
 const echoTest = takeFlag(args, "--echo-test");
 const submitKey = decodeSubmitKey(submitKeyName);
@@ -47,6 +48,7 @@ let recent = "";
 let lastAnswerAt = 0;
 let answered = false;
 let answerTimer = null;
+let pendingPromptKey = null;
 const answeredPromptKeys = new Set();
 const stdinDecoder = new StringDecoder("utf8");
 
@@ -98,28 +100,34 @@ function maybeAnswer() {
 
   const text = normalize(recent);
   const promptKey = autoAnswerPromptKey(text);
-  if (promptKey === null || answeredPromptKeys.has(promptKey)) {
+  if (promptKey !== null && !answeredPromptKeys.has(promptKey)) {
+    pendingPromptKey = promptKey;
+  }
+
+  if (pendingPromptKey === null || !isInputPromptReady(text)) {
     return;
   }
 
   answerTimer = setTimeout(() => {
     answerTimer = null;
     const current = normalize(recent);
-    const currentPromptKey = autoAnswerPromptKey(current);
-    if (currentPromptKey === null || answeredPromptKeys.has(currentPromptKey)) {
+    if (pendingPromptKey === null || answeredPromptKeys.has(pendingPromptKey) || !isInputPromptReady(current)) {
       log("skip: prompt changed or became blocked");
       return;
     }
     lastAnswerAt = Date.now();
     answered = true;
-    answeredPromptKeys.add(currentPromptKey);
+    answeredPromptKeys.add(pendingPromptKey);
     trimAnsweredPromptKeys();
+    const answeredKey = pendingPromptKey;
+    pendingPromptKey = null;
     recent = "";
     pty.write(answer);
     setTimeout(() => {
       pty.write(submitKey);
-    }, 30);
-    log(`answered: ${answer} submit=${submitKeyName}`);
+      log(`submitted: ${submitKeyName}`);
+    }, Math.max(0, submitDelayMs));
+    log(`answered: ${answer} key=${answeredKey.slice(0, 80)}`);
   }, Math.max(0, delayMs));
 }
 
@@ -150,6 +158,22 @@ function autoAnswerPromptKey(text) {
   }
 
   return null;
+}
+
+function isInputPromptReady(text) {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const match = lines[index].match(/^\s*›\s*(.*)$/u);
+    if (match) {
+      return match[1].trim().length === 0;
+    }
+  }
+
+  return false;
 }
 
 function extractPromptText(text) {
@@ -331,7 +355,8 @@ Usage:
 
 Options:
   --answer <text>       Text to send when a safe prompt is detected. Default: yes
-  --submit-key <key>    Submit key sequence: cr, lf, or crlf. Default: crlf
+  --submit-key <key>    Submit key sequence: cr, lf, or crlf. Default: cr
+  --submit-delay-ms <ms> Delay between answer text and submit key. Default: 500
   --command <command>   Command to wrap. Default: codex
   --delay-ms <ms>       Delay before answering. Default: 250
   --cooldown-ms <ms>    Minimum time between answers. Default: 4000
@@ -396,6 +421,16 @@ function runSelfTest() {
       failed += 1;
       process.stderr.write("FAIL: repeat prompt key was not stable\n");
     }
+  }
+
+  if (!isInputPromptReady("› ")) {
+    failed += 1;
+    process.stderr.write("FAIL: empty input prompt was not ready\n");
+  }
+
+  if (isInputPromptReady("› yes")) {
+    failed += 1;
+    process.stderr.write("FAIL: non-empty input prompt was ready\n");
   }
 
   if (failed > 0) {
