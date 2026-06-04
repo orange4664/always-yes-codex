@@ -61,6 +61,7 @@ answers or deliberately skips a changed prompt.
 --cooldown-ms <ms>    Minimum time between answers. Default: 4000
 --once                Answer at most once per session
 --verbose             Print auto-answer decisions to stderr
+--debug-screen <text> Classify captured screen text and exit
 --self-test           Run prompt-classification checks
 --echo-test           Echo stdin through a wrapped command for input tests
 --help                Show help
@@ -76,5 +77,7 @@ npm unlink -g always-yes-codex
 
 - This is heuristic automation, not a security boundary.
 - The same prompt is answered only once per session, even if Codex redraws it.
+- Codex input placeholders such as `Run /review on my current changes` are treated as ready input prompts.
+- The submit key is sent only after the wrapper sees the answer text in Codex's input line.
 - Keep using Codex's normal approval controls for commands and permissions.
 - Use `--verbose` for the first few sessions to see when the wrapper answers.

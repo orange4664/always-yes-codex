@@ -17,6 +17,7 @@ const delayMs = Number(takeOption(args, "--delay-ms") ?? 250);
 const submitDelayMs = Number(takeOption(args, "--submit-delay-ms") ?? 500);
 const cooldownMs = Number(takeOption(args, "--cooldown-ms") ?? 4000);
 const echoTest = takeFlag(args, "--echo-test");
+const debugScreen = takeOption(args, "--debug-screen");
 const submitKey = decodeSubmitKey(submitKeyName);
 
 if (takeFlag(args, "--help")) {
@@ -26,6 +27,11 @@ if (takeFlag(args, "--help")) {
 
 if (takeFlag(args, "--self-test")) {
   runSelfTest();
+  process.exit(0);
+}
+
+if (debugScreen !== undefined) {
+  debugScreenText(debugScreen);
   process.exit(0);
 }
 
@@ -49,6 +55,8 @@ let lastAnswerAt = 0;
 let answered = false;
 let answerTimer = null;
 let pendingPromptKey = null;
+let pendingSubmitAnswer = null;
+let submitTimer = null;
 const answeredPromptKeys = new Set();
 const stdinDecoder = new StringDecoder("utf8");
 
@@ -93,12 +101,20 @@ function maybeAnswer() {
     return;
   }
 
+  const text = normalize(recent);
+  if (maybeSubmitTypedAnswer(text)) {
+    return;
+  }
+
+  if (pendingSubmitAnswer !== null) {
+    return;
+  }
+
   const now = Date.now();
   if (now - lastAnswerAt < cooldownMs) {
     return;
   }
 
-  const text = normalize(recent);
   const promptKey = autoAnswerPromptKey(text);
   if (promptKey !== null && !answeredPromptKeys.has(promptKey)) {
     pendingPromptKey = promptKey;
@@ -121,14 +137,53 @@ function maybeAnswer() {
     trimAnsweredPromptKeys();
     const answeredKey = pendingPromptKey;
     pendingPromptKey = null;
-    recent = "";
-    pty.write(answer);
+    pendingSubmitAnswer = answer;
+    if (currentInputPromptText(current) !== "") {
+      pty.write("\x15");
+    }
     setTimeout(() => {
-      pty.write(submitKey);
-      log(`submitted: ${submitKeyName}`);
-    }, Math.max(0, submitDelayMs));
-    log(`answered: ${answer} key=${answeredKey.slice(0, 80)}`);
+      pty.write(answer);
+      scheduleSubmitIfNeeded();
+    }, 100);
+    log(`typed: ${answer} key=${answeredKey.slice(0, 80)}`);
   }, Math.max(0, delayMs));
+}
+
+function maybeSubmitTypedAnswer(text) {
+  if (pendingSubmitAnswer === null || submitTimer !== null) {
+    return false;
+  }
+
+  if (currentInputPromptText(text) !== pendingSubmitAnswer) {
+    return false;
+  }
+
+  submitTimer = setTimeout(() => {
+    submitPendingAnswer();
+  }, 50);
+  return true;
+}
+
+function scheduleSubmitIfNeeded() {
+  if (pendingSubmitAnswer === null || submitTimer !== null) {
+    return;
+  }
+  submitTimer = setTimeout(() => {
+    submitPendingAnswer();
+  }, Math.max(0, submitDelayMs));
+}
+
+function submitPendingAnswer() {
+  if (pendingSubmitAnswer === null) {
+    submitTimer = null;
+    return;
+  }
+  pty.write(submitKey);
+  lastAnswerAt = Date.now();
+  pendingSubmitAnswer = null;
+  submitTimer = null;
+  recent = "";
+  log(`submitted: ${submitKeyName}`);
 }
 
 function looksLikeQuestion(text) {
@@ -161,6 +216,11 @@ function autoAnswerPromptKey(text) {
 }
 
 function isInputPromptReady(text) {
+  const inputText = currentInputPromptText(text);
+  return inputText !== null && (inputText.length === 0 || isCodexPlaceholder(inputText) || isCodexExamplePrompt(inputText));
+}
+
+function currentInputPromptText(text) {
   const lines = text
     .split("\n")
     .map((line) => line.trimEnd())
@@ -169,11 +229,30 @@ function isInputPromptReady(text) {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const match = lines[index].match(/^\s*›\s*(.*)$/u);
     if (match) {
-      return match[1].trim().length === 0;
+      return match[1].trim();
     }
   }
 
-  return false;
+  return null;
+}
+
+function isCodexPlaceholder(text) {
+  const placeholders = [
+    /^Run\s+\/\w+/i,
+    /^Use\s+\/\w+/i,
+    /^Find and fix a bug in @filename$/i,
+    /^Write tests for @filename$/i,
+    /^Add a feature to @filename$/i,
+    /^Improve documentation in @filename$/i,
+    /^Explain this codebase$/i,
+    /^Ask\s+/i,
+    /^Type\s+/i,
+  ];
+  return placeholders.some((pattern) => pattern.test(text));
+}
+
+function isCodexExamplePrompt(text) {
+  return /@filename\b/i.test(text);
 }
 
 function extractPromptText(text) {
@@ -340,6 +419,10 @@ function cleanup() {
     clearTimeout(answerTimer);
     answerTimer = null;
   }
+  if (submitTimer) {
+    clearTimeout(submitTimer);
+    submitTimer = null;
+  }
   process.stdin.setRawMode?.(false);
 }
 
@@ -362,6 +445,7 @@ Options:
   --cooldown-ms <ms>    Minimum time between answers. Default: 4000
   --once                Answer at most once per session
   --verbose             Print auto-answer decisions to stderr
+  --debug-screen <text> Classify captured screen text and exit
   --echo-test           Echo stdin through the wrapped command for input tests
   --help                Show this help
 `);
@@ -428,9 +512,94 @@ function runSelfTest() {
     process.stderr.write("FAIL: empty input prompt was not ready\n");
   }
 
+  if (!isInputPromptReady("› Run /review on my current changes")) {
+    failed += 1;
+    process.stderr.write("FAIL: Codex placeholder input prompt was not ready\n");
+  }
+
+  if (!isInputPromptReady("› Write tests for @filename")) {
+    failed += 1;
+    process.stderr.write("FAIL: Codex write-tests placeholder was not ready\n");
+  }
+
+  if (!isInputPromptReady("› Find and fix a bug in @filename")) {
+    failed += 1;
+    process.stderr.write("FAIL: Codex bugfix placeholder was not ready\n");
+  }
+
+  if (!isInputPromptReady("› Improve documentation in @filename")) {
+    failed += 1;
+    process.stderr.write("FAIL: Codex documentation placeholder was not ready\n");
+  }
+
+  if (!isInputPromptReady("› Use /skills to list available skills")) {
+    failed += 1;
+    process.stderr.write("FAIL: Codex slash-command placeholder was not ready\n");
+  }
+
   if (isInputPromptReady("› yes")) {
     failed += 1;
     process.stderr.write("FAIL: non-empty input prompt was ready\n");
+  }
+
+  const pastedScreen = normalize(`› 随便问我一个问题，让我回答yes or no的那种
+
+• 你今天已经喝过水了吗？
+
+› Run /review on my current changes
+
+  gpt-5.5 high fast · ~`);
+  if (autoAnswerPromptKey(pastedScreen) === null || !isInputPromptReady(pastedScreen)) {
+    failed += 1;
+    process.stderr.write("FAIL: pasted Codex screen was not actionable\n");
+  }
+
+  const realScreen = normalize(`› 随便问我一个问题，让我回答yes or no的那种
+
+• 你今天喝过咖啡了吗？
+
+› Write tests for @filename
+
+  gpt-5.5 high fast · ~`);
+  if (autoAnswerPromptKey(realScreen) === null || !isInputPromptReady(realScreen)) {
+    failed += 1;
+    process.stderr.write("FAIL: real Codex screen was not actionable\n");
+  }
+
+  const slashCommandScreen = normalize(`› 随便问我一个问题，让我回答yes or no的那种
+
+• 你今天喝过咖啡了吗？
+
+› Use /skills to list available skills
+
+  gpt-5.5 high fast · ~`);
+  if (autoAnswerPromptKey(slashCommandScreen) === null || !isInputPromptReady(slashCommandScreen)) {
+    failed += 1;
+    process.stderr.write("FAIL: slash-command Codex screen was not actionable\n");
+  }
+
+  const bugfixScreen = normalize(`› 随便问我一个问题，让我回答yes or no的那种
+
+• 你今天喝水了吗？
+
+› Find and fix a bug in @filename
+
+  gpt-5.5 high fast · ~`);
+  if (autoAnswerPromptKey(bugfixScreen) === null || !isInputPromptReady(bugfixScreen)) {
+    failed += 1;
+    process.stderr.write("FAIL: bugfix-placeholder Codex screen was not actionable\n");
+  }
+
+  const documentationScreen = normalize(`› 随便问我一个问题，让我回答yes or no的那种
+
+• 你今天喝过水了吗？
+
+› Improve documentation in @filename
+
+  gpt-5.5 high fast · ~`);
+  if (autoAnswerPromptKey(documentationScreen) === null || !isInputPromptReady(documentationScreen)) {
+    failed += 1;
+    process.stderr.write("FAIL: documentation-placeholder Codex screen was not actionable\n");
   }
 
   if (failed > 0) {
@@ -448,4 +617,17 @@ function runEchoTest() {
     "-e",
     "process.stdin.setEncoding('utf8'); process.stdin.on('data', (data) => { process.stdout.write(data); if (data.includes('\\n') || data.includes('\\r')) process.exit(0); });",
   );
+}
+
+function debugScreenText(screenText) {
+  const text = normalize(screenText);
+  const key = autoAnswerPromptKey(text);
+  const inputText = currentInputPromptText(text);
+  process.stdout.write(JSON.stringify({
+    shouldAnswer: key !== null,
+    promptKey: key,
+    inputReady: isInputPromptReady(text),
+    inputText,
+  }, null, 2));
+  process.stdout.write(os.EOL);
 }
