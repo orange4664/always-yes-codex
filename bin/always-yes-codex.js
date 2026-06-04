@@ -240,6 +240,7 @@ function isCodexPlaceholder(text) {
   const placeholders = [
     /^Run\s+\/\w+/i,
     /^Use\s+\/\w+/i,
+    /^Implement \{feature\}$/i,
     /^Find and fix a bug in @filename$/i,
     /^Write tests for @filename$/i,
     /^Add a feature to @filename$/i,
@@ -252,7 +253,7 @@ function isCodexPlaceholder(text) {
 }
 
 function isCodexExamplePrompt(text) {
-  return /@filename\b/i.test(text);
+  return /@filename\b/i.test(text) || /\{[a-z][a-z0-9_-]*\}/i.test(text);
 }
 
 function extractPromptText(text) {
@@ -527,6 +528,11 @@ function runSelfTest() {
     process.stderr.write("FAIL: Codex bugfix placeholder was not ready\n");
   }
 
+  if (!isInputPromptReady("› Implement {feature}")) {
+    failed += 1;
+    process.stderr.write("FAIL: Codex feature placeholder was not ready\n");
+  }
+
   if (!isInputPromptReady("› Improve documentation in @filename")) {
     failed += 1;
     process.stderr.write("FAIL: Codex documentation placeholder was not ready\n");
@@ -600,6 +606,18 @@ function runSelfTest() {
   if (autoAnswerPromptKey(documentationScreen) === null || !isInputPromptReady(documentationScreen)) {
     failed += 1;
     process.stderr.write("FAIL: documentation-placeholder Codex screen was not actionable\n");
+  }
+
+  const featureScreen = normalize(`› 随便问我一个需要我回答yes or no的问题
+
+• 你今天喝水了吗？
+
+› Implement {feature}
+
+  gpt-5.5 high fast · ~`);
+  if (autoAnswerPromptKey(featureScreen) === null || !isInputPromptReady(featureScreen)) {
+    failed += 1;
+    process.stderr.write("FAIL: feature-placeholder Codex screen was not actionable\n");
   }
 
   if (failed > 0) {

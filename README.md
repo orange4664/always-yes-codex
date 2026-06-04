@@ -78,6 +78,7 @@ npm unlink -g always-yes-codex
 - This is heuristic automation, not a security boundary.
 - The same prompt is answered only once per session, even if Codex redraws it.
 - Codex input placeholders such as `Run /review on my current changes` are treated as ready input prompts.
+- Codex example placeholders such as `Implement {feature}` and `Write tests for @filename` are treated as ready input prompts.
 - The submit key is sent only after the wrapper sees the answer text in Codex's input line.
 - Keep using Codex's normal approval controls for commands and permissions.
 - Use `--verbose` for the first few sessions to see when the wrapper answers.
