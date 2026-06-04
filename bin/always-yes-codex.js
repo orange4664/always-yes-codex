@@ -12,9 +12,11 @@ const verbose = takeFlag(args, "--verbose");
 const once = takeFlag(args, "--once");
 let command = takeOption(args, "--command") ?? "codex";
 const answer = takeOption(args, "--answer") ?? "yes";
+const submitKeyName = takeOption(args, "--submit-key") ?? "crlf";
 const delayMs = Number(takeOption(args, "--delay-ms") ?? 250);
 const cooldownMs = Number(takeOption(args, "--cooldown-ms") ?? 4000);
 const echoTest = takeFlag(args, "--echo-test");
+const submitKey = decodeSubmitKey(submitKeyName);
 
 if (takeFlag(args, "--help")) {
   printHelp();
@@ -108,13 +110,16 @@ function maybeAnswer() {
       log("skip: prompt changed or became blocked");
       return;
     }
-    pty.write(`${answer}\r`);
     lastAnswerAt = Date.now();
     answered = true;
     answeredPromptKeys.add(currentPromptKey);
     trimAnsweredPromptKeys();
     recent = "";
-    log(`answered: ${answer}`);
+    pty.write(answer);
+    setTimeout(() => {
+      pty.write(submitKey);
+    }, 30);
+    log(`answered: ${answer} submit=${submitKeyName}`);
   }, Math.max(0, delayMs));
 }
 
@@ -271,6 +276,20 @@ function takeOption(values, option) {
   return value;
 }
 
+function decodeSubmitKey(value) {
+  switch (value.toLowerCase()) {
+    case "cr":
+      return "\r";
+    case "lf":
+      return "\n";
+    case "crlf":
+      return "\r\n";
+    default:
+      process.stderr.write(`Unsupported --submit-key "${value}". Use cr, lf, or crlf.${os.EOL}`);
+      process.exit(2);
+  }
+}
+
 function resolveCommand(commandName) {
   if (process.platform !== "win32" || path.extname(commandName) || commandName.includes(path.sep)) {
     return commandName;
@@ -312,6 +331,7 @@ Usage:
 
 Options:
   --answer <text>       Text to send when a safe prompt is detected. Default: yes
+  --submit-key <key>    Submit key sequence: cr, lf, or crlf. Default: crlf
   --command <command>   Command to wrap. Default: codex
   --delay-ms <ms>       Delay before answering. Default: 250
   --cooldown-ms <ms>    Minimum time between answers. Default: 4000

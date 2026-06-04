@@ -54,6 +54,7 @@ answers or deliberately skips a changed prompt.
 
 ```text
 --answer <text>       Text to send when a safe prompt is detected. Default: yes
+--submit-key <key>    Submit key sequence: cr, lf, or crlf. Default: crlf
 --command <command>   Command to wrap. Default: codex
 --delay-ms <ms>       Delay before answering. Default: 250
 --cooldown-ms <ms>    Minimum time between answers. Default: 4000
