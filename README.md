@@ -1,9 +1,9 @@
 # always-yes-codex
 
 `always-yes-codex` is a small pseudo-terminal wrapper for Codex CLI. It starts
-the real `codex` command and types `yes` for low-risk yes/no prompts, including
-ordinary yes/no questions and prompts that accept a proposed implementation
-direction.
+the real `codex` command and types `yes` for low-risk prompts, including
+ordinary yes/no questions, prompts that accept a proposed implementation
+direction, and choice questions where Codex gives a recommendation.
 
 It is not an auto-approval tool. The default blocklist skips prompts that
 mention approval, permission, sandbox escalation, command execution,

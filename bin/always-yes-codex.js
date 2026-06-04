@@ -119,9 +119,10 @@ function looksLikeQuestion(text) {
 }
 
 function shouldAutoAnswer(text) {
-  return looksLikeQuestion(text)
-    && !isBlockedPrompt(text)
-    && (looksLikeYesNoPrompt(text) || looksLikeLowRiskDirectionPrompt(text));
+  return !isBlockedPrompt(text)
+    && ((looksLikeQuestion(text)
+      && (looksLikeYesNoPrompt(text) || looksLikeLowRiskDirectionPrompt(text)))
+      || looksLikeRecommendedChoicePrompt(text));
 }
 
 function looksLikeYesNoPrompt(text) {
@@ -145,6 +146,17 @@ function looksLikeLowRiskDirectionPrompt(text) {
     /(?:这个|该|这套).{0,30}(?:方向|方案|建议|计划).{0,30}(?:可以|接受|同意|行吗|好吗)/,
   ];
   return patterns.some((pattern) => pattern.test(text));
+}
+
+function looksLikeRecommendedChoicePrompt(text) {
+  const promptTail = text.slice(-1000);
+  const patterns = [
+    /\b(?:which|what)\b.{0,160}\b(?:option|approach|plan|direction|choice)\b.{0,240}\b(?:i recommend|my recommendation|recommended)\b/i,
+    /\b(?:i recommend|my recommendation|recommended)\b.{0,240}\b(?:which|what)\b.{0,160}\b(?:option|approach|plan|direction|choice)\b/i,
+    /(?:选哪个|哪个方案|哪种方案|哪个方向|哪种方向|哪个计划|哪种计划|怎么选).{0,240}(?:我推荐|我建议|建议选|推荐选|推荐|建议)/,
+    /(?:我推荐|我建议|建议选|推荐选|推荐|建议).{0,240}(?:选哪个|哪个方案|哪种方案|哪个方向|哪种方向|哪个计划|哪种计划|怎么选)/,
+  ];
+  return patterns.some((pattern) => pattern.test(promptTail));
 }
 
 function isBlockedPrompt(text) {
@@ -264,6 +276,10 @@ function runSelfTest() {
     {
       text: "你想选哪个方案？",
       expected: false,
+    },
+    {
+      text: "你想选哪个方案？我推荐xxxx",
+      expected: true,
     },
     {
       text: "Do you want to allow this command to run outside the sandbox?",
