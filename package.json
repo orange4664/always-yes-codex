@@ -1,6 +1,6 @@
 {
   "name": "always-yes-codex",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Pseudo-terminal wrapper that auto-answers low-risk Codex CLI direction prompts with yes.",
   "author": "orange4664 <102470751+orange4664@users.noreply.github.com>",
   "license": "MIT",

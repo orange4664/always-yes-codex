@@ -59,6 +59,7 @@ answers or deliberately skips a changed prompt.
 --once                Answer at most once per session
 --verbose             Print auto-answer decisions to stderr
 --self-test           Run prompt-classification checks
+--echo-test           Echo stdin through a wrapped command for input tests
 --help                Show help
 ```
 

@@ -4,15 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { execFileSync } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { spawn } from "node-pty";
 
 const args = process.argv.slice(2);
 const verbose = takeFlag(args, "--verbose");
 const once = takeFlag(args, "--once");
-const command = takeOption(args, "--command") ?? "codex";
+let command = takeOption(args, "--command") ?? "codex";
 const answer = takeOption(args, "--answer") ?? "yes";
 const delayMs = Number(takeOption(args, "--delay-ms") ?? 250);
 const cooldownMs = Number(takeOption(args, "--cooldown-ms") ?? 4000);
+const echoTest = takeFlag(args, "--echo-test");
 
 if (takeFlag(args, "--help")) {
   printHelp();
@@ -22,6 +24,10 @@ if (takeFlag(args, "--help")) {
 if (takeFlag(args, "--self-test")) {
   runSelfTest();
   process.exit(0);
+}
+
+if (echoTest) {
+  runEchoTest();
 }
 
 const pty = spawn(resolveCommand(command), args, {
@@ -39,6 +45,7 @@ let recent = "";
 let lastAnswerAt = 0;
 let answered = false;
 let answerTimer = null;
+const stdinDecoder = new StringDecoder("utf8");
 
 pty.onData((data) => {
   process.stdout.write(data);
@@ -47,16 +54,23 @@ pty.onData((data) => {
 });
 
 pty.onExit(({ exitCode }) => {
-  if (answerTimer) {
-    clearTimeout(answerTimer);
-  }
+  cleanup();
   process.exit(exitCode ?? 0);
 });
 
 process.stdin.setRawMode?.(true);
 process.stdin.resume();
 process.stdin.on("data", (data) => {
-  pty.write(data.toString("binary"));
+  const text = stdinDecoder.write(data);
+  if (text.length > 0) {
+    pty.write(text);
+  }
+});
+process.stdin.on("end", () => {
+  const text = stdinDecoder.end();
+  if (text.length > 0) {
+    pty.write(text);
+  }
 });
 
 process.stdout.on("resize", () => {
@@ -66,6 +80,8 @@ process.stdout.on("resize", () => {
 process.on("SIGINT", () => {
   pty.write("\x03");
 });
+
+process.on("exit", cleanup);
 
 function maybeAnswer() {
   if (answerTimer || (once && answered)) {
@@ -185,6 +201,14 @@ function log(message) {
   }
 }
 
+function cleanup() {
+  if (answerTimer) {
+    clearTimeout(answerTimer);
+    answerTimer = null;
+  }
+  process.stdin.setRawMode?.(false);
+}
+
 function printHelp() {
   process.stdout.write(`always-yes-codex
 
@@ -202,6 +226,7 @@ Options:
   --cooldown-ms <ms>    Minimum time between answers. Default: 4000
   --once                Answer at most once per session
   --verbose             Print auto-answer decisions to stderr
+  --echo-test           Echo stdin through the wrapped command for input tests
   --help                Show this help
 `);
 }
@@ -243,4 +268,14 @@ function runSelfTest() {
     return;
   }
   process.stdout.write("self-test passed\n");
+}
+
+function runEchoTest() {
+  command = process.execPath;
+  args.splice(
+    0,
+    args.length,
+    "-e",
+    "process.stdin.setEncoding('utf8'); process.stdin.on('data', (data) => { process.stdout.write(data); if (data.includes('\\n') || data.includes('\\r')) process.exit(0); });",
+  );
 }
